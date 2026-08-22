@@ -141,3 +141,17 @@ data: {"done": true}
 2. **类型安全**: 禁止使用`any`，必须标注类型
 3. **Hydration**: 避免在SSR中使用动态数据
 4. **性能**: 避免不必要的重新渲染
+
+## Agent skills
+
+### Issue tracker
+
+Issues 在 GitHub Issues（`AzureDestiny346/smart-classroom-workshop`）中跟踪，通过 `gh` CLI 读写。见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+使用默认的五个规范 triage 标签（`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`）。见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+Single-context 布局：根目录 `CONTEXT.md` + `docs/adr/`。见 `docs/agents/domain.md`。
