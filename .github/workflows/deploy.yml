@@ -15,8 +15,8 @@ jobs:
 
       - name: 安装 pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        # 不传 version，由 package.json 的 packageManager（pnpm@9.0.0）决定；
+        # 显式传 version 且与之非精确相等时 action 会报 "Multiple versions of pnpm specified"
 
       - name: 安装 Node.js
         uses: actions/setup-node@v4
