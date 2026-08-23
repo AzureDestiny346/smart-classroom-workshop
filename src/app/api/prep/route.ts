@@ -42,12 +42,14 @@ export async function POST(request: NextRequest) {
     const client = new LLMClient(undefined, customHeaders);
 
     // 流式响应：逐块推送 content，done 帧附带完整文本与服务端提取的结构化摘要
+    // LLM_MODEL 可在 .env.local 覆盖默认模型（端点与模型需配套，如 DashScope + qwen-plus）
+    const llmConfig = process.env.LLM_MODEL ? { model: process.env.LLM_MODEL } : undefined;
     const encoder = new TextEncoder();
     const streamData = new ReadableStream({
       async start(controller) {
         try {
           let fullContent = '';
-          for await (const chunk of client.stream(messages)) {
+          for await (const chunk of client.stream(messages, llmConfig)) {
             if (chunk.content) {
               fullContent += chunk.content;
               controller.enqueue(
@@ -60,7 +62,11 @@ export async function POST(request: NextRequest) {
             encoder.encode(`data: ${JSON.stringify({ done: true, result: fullContent, structured })}\n\n`)
           );
         } catch (error) {
-          controller.error(error);
+          // 以错误帧收尾而非掐断流：前端能给出明确提示而不是静默空白
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ error: 'AI 服务暂时不可用，请稍后重试' })}\n\n`)
+          );
+          console.error('Prep stream error:', error);
         } finally {
           controller.close();
         }
