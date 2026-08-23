@@ -30,6 +30,9 @@ jobs:
       - name: 类型检查
         run: pnpm ts-check
 
+      - name: 单元测试
+        run: pnpm test
+
       - name: 代码检查
         run: pnpm lint
 
