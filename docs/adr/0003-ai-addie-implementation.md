@@ -1,8 +1,8 @@
 # ADR-0003 - AI-ADDIE教学设计模型实现
 
-**日期**: 2026-08-23  
-**状态**: 已批准  
-**相关**: ADR-0002  
+**日期**: 2026-08-23（2026-08-23 重构落地）  
+**状态**: 已批准 · 已实现  
+**相关**: ADR-0002
 
 ## 背景
 
@@ -12,181 +12,77 @@
 
 实现**AI-ADDIE五阶段智能辅助系统**，每个阶段都有专门的AI提示词和输出结构。
 
-## 实现架构
+**阶段契约收敛（2026-08-23 重构）**：五阶段的标识、元数据、提示词组装与成果解析统一收敛到
+`src/lib/prep-stages.ts` 单一 module。此前 ADDIE 枚举散落四处（页面/storage/进度条/路由），
+且阶段成果的生产者与消费者契约断裂（API 返回字符串、前端期待对象），本次重构以类型契约
+跨 seam 修复。
 
-### 阶段1：分析（Analysis）
+## 阶段契约 module（src/lib/prep-stages.ts）
+
 ```typescript
-// src/app/api/prep/route.ts:44-64
-case 'analysis':
-  systemPrompt += `
-  ## 分析模式
-  你需要对教学内容进行全面分析：
-  1. 知识点结构梳理
-  2. 重点、难点识别
-  3. 学生常见误解预测
-  4. 与前后知识的关联
-  5. 教学价值分析`;
-```
-
-**输出包含**：
-- 知识点分级（核心/重要/一般）
-- 教学重点难点
-- 学生常见误解
-- 知识图谱关联
-
-### 阶段2：设计（Design）
-```typescript
-// src/app/api/prep/route.ts:65-81
-case 'design':
-  systemPrompt += `
-  ## 设计模式
-  你需要为课程设计：
-  1. 基于Bloom认知层次的教学目标
-  2. 合适的教学策略推荐
-  3. 评估方案设计`;
-```
-
-**输出包含**：
-- 记忆/理解/应用/分析层次目标
-- 教学策略建议
-- 形成性/总结性评价方案
-
-### 阶段3：开发（Development）
-```typescript
-// src/app/api/prep/route.ts:82-98
-case 'development':
-  systemPrompt += `
-  ## 开发模式
-  你需要生成具体的教学资源：
-  1. 教案详细内容
-  2. 配套练习题
-  3. 课件大纲`;
-```
-
-**输出包含**：
-- 完整教案结构
-- 递进式练习题
-- 课件设计建议
-
-### 阶段4：实施（Implementation）
-```typescript
-// src/app/api/prep/route.ts:101-117
-case 'implementation':
-  systemPrompt += `
-  ## 实施模式
-  你需要提供课堂实施建议：
-  1. 课堂节奏把控
-  2. 师生互动点提示
-  3. 突发情况应对`;
-```
-
-**输出包含**：
-- 45分钟时间分配
-- 互动环节设计
-- 应急处理预案
-
-### 阶段5：评估（Evaluation）
-```typescript
-// src/app/api/prep/route.ts:119-135
-case 'evaluation':
-  systemPrompt += `
-  ## 评估模式
-  你需要帮助教师：
-  1. 评价方式设计
-  2. 教学反思指导
-  3. 改进建议`;
-```
-
-**输出包含**：
-- 多维度评价量表
-- 反思问题模板
-- 持续改进方案
-
-## 创新特性
-
-### 1. 流式交互体验
-- 基于SSE的实时响应
-- 打字机效果呈现
-- 支持追问和澄清
-
-### 2. 上下文记忆
-- 阶段间信息传递
-- 保持会话连贯性
-- 累积式成果构建
-
-### 3. 动态适配
-- 根据学科年级调整
-- 基于用户反馈优化
-- 支持自定义约束
-
-## 技术实现
-
-### API路由设计
-```typescript
-// src/app/api/prep/route.ts
-interface PrepAnalysisRequest {
-  subject: string;      // 学科
-  grade: string;       // 年级
-  chapter: string;     // 章节
-  knowledgePoints: string[];  // 知识点
-  objectives?: string[];    // 教学目标
-  mode: 'analysis' | 'design' | 'development' | 'implementation' | 'evaluation';
+export const ADDIE_STAGES: readonly StageMeta[];        // 有序五阶段元数据
+export interface StageOutput {
+  raw: string;                                          // 完整 Markdown 成果
+  structured?: Record<string, unknown>;                 // 文末 JSON 摘要块（LLM 未按约定输出时缺席）
 }
+export type StageOutputs = Partial<Record<PrepStage, StageOutput>>;
+export function buildStagePrompt(mode, courseInfo, priorOutputs?): ChatMessage[];
+export function extractJsonBlock(raw): Record<string, unknown> | null;
+export function stripJsonBlock(raw): string;            // 渲染用：剥离摘要块
 ```
 
-### 前端状态管理
-```typescript
-// src/app/prep/page.tsx
-const [currentStep, setCurrentStep] = useState("analysis");
-const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
-```
+各阶段模式指令（分析/Bloom 设计/资源开发/实施建议/评估反思）与 JSON 摘要 schema 见
+`STAGE_INSTRUCTIONS`；本 module 不依赖任何 LLM SDK，Vitest 直接可测（`prep-stages.test.ts`）。
 
-### 数据结构设计
-```typescript
-interface AnalysisResult {
-  knowledgePoints: KnowledgePoint[];
-  teachingPoints: string[];
-  difficulties: string[];
-  misconceptions: string[];
-}
-```
+## 阶段成果流（混合契约）
+
+1. 前端携带 `priorOutputs`（已完成阶段的 `StageOutputs`）请求 `POST /api/prep`
+2. 服务端 `buildStagePrompt` 组装提示词：基础角色 + 阶段指令 + 已完成成果注入
+   （structured 优先，raw 截断至 1500 字符）——**阶段间信息传递**
+3. SSE 流式逐块推送 `{content}`；done 帧携带 `{done: true, result, structured?}`
+4. 服务端 `extractJsonBlock` 提取文末 JSON 摘要；失败时 structured 缺席，前端以 raw 兜底
+5. 前端 `stageOutputs` 按 mode 落位——**累积式成果构建**，并作为下一阶段请求的上下文
+
+## 消费方
+
+- `src/app/api/prep/route.ts`：校验 + `buildStagePrompt` + `extractJsonBlock`（185 → 94 行）
+- `src/app/prep/page.tsx`：阶段元数据、成果渲染（结构化优先/raw 兜底）、保存教案/重新开始
+- `src/lib/storage.ts`：归一化阶段标识（`STAGE_IDS`）
+- `src/app/projects/page.tsx`：ADDIE 进度条
+
+## 已实现特性
+
+- **流式交互**：SSE 打字机效果，对话模式支持多轮上下文
+- **阶段间信息传递**：priorOutputs 注入，见 `buildStagePrompt` 测试
+- **累积式成果构建**：`stageOutputs` 状态 + 保存教案（Markdown 下载）
+- **诚实降级**：LLM 未输出 JSON 摘要时自动回退纯文本渲染，不阻塞流程
 
 ## 教育价值
 
-### 1. 系统化备课
-- 从碎片化到结构化
-- 确保教学设计的完整性
-- 提供专业方法论指导
-
-### 2. 效率提升
-- 单人备课时间减少60%+
-- 新手教师快速上手
-- 资源复用和迭代
-
-### 3. 质量保障
-- 基于教育理论的设计
-- 预防常见教学问题
-- 持续优化的智能建议
+- 系统化备课：从碎片化到结构化，ADDIE 五阶段全流程 AI 辅助
+- 新手教师友好：每阶段有明确输入、AI 动作与产出物
+- 成果可沉淀：阶段成果 + 教案导出（Markdown）
 
 ## 与传统方案对比
 
 | 特性 | 传统ADDIE | AI-ADDIE |
 |------|------------|----------|
-| 执行效率 | 低（2-4小时） | 高（15-30分钟） |
+| 执行效率 | 低（2-4小时） | 高（目标 15-30 分钟） |
 | 专业性 | 依赖经验 | 理论+AI辅助 |
-| 适应性 | 固定模板 | 动态调整 |
-| 可追溯性 | 文档记录 | 全过程保存 |
-| 协作性 | 有限 | 版本管理+分享 |
+| 阶段衔接 | 人工回顾 | priorOutputs 自动传递 |
+| 可追溯性 | 文档记录 | 阶段成果全量保存 |
 
 ## 未来扩展
 
 1. **多学科支持**：扩展到物理、化学等理科
 2. **学段适配**：小学、大学教育的差异化
-3. **智能评估**：基于课堂实践的效果反馈
+3. **成果入库**：阶段成果写回复课项目（阶段二 `?project=` 接线后）
 4. **个性化推荐**：基于教师特征的定制方案
 
 ## 相关资源
 
 - [ADR-0002 - 数学专业提示词框架](./0002-math-prompt-framework.md)
-- [API路由实现](../../src/app/api/prep/route.ts)
+- [阶段契约 module](../../src/lib/prep-stages.ts)
+- [契约测试](../../src/lib/prep-stages.test.ts)
+- [API路由](../../src/app/api/prep/route.ts)
 - [前端界面](../../src/app/prep/page.tsx)

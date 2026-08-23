@@ -15,8 +15,7 @@ import {
   MessageSquare,
   Loader2,
   Save,
-  RotateCcw,
-  Download
+  RotateCcw
 } from "lucide-react";
 import { Navbar } from "@/components/layout/navbar";
 import { Button } from "@/components/ui/button";
@@ -27,35 +26,36 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
+import {
+  ADDIE_STAGES,
+  parseAnalysisSummary,
+  stripJsonBlock,
+  type AnalysisSummary,
+  type PrepStage,
+  type StageOutputs,
+} from "@/lib/prep-stages";
 
-interface Message {
+interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
 }
 
-interface KnowledgePoint {
-  id: string;
-  text: string;
-  level: "core" | "important" | "normal";
-}
+// 阶段图标映射（视图层关注点，与 lib 的阶段元数据解耦）
+const STAGE_ICONS: Record<PrepStage, typeof BookOpen> = {
+  analysis: BookOpen,
+  design: Target,
+  development: Palette,
+  implementation: Rocket,
+  evaluation: CheckCircle2,
+};
 
-interface AnalysisResult {
-  knowledgePoints: KnowledgePoint[];
-  teachingPoints: string[];
-  difficulties: string[];
-  misconceptions: string[];
-}
-
-// ADDIE Steps
-const addieSteps = [
-  { id: "analysis", label: "分析", icon: BookOpen, description: "Analysis" },
-  { id: "design", label: "设计", icon: Target, description: "Design" },
-  { id: "development", label: "开发", icon: Palette, description: "Development" },
-  { id: "implementation", label: "实施", icon: Rocket, description: "Implementation" },
-  { id: "evaluation", label: "评估", icon: CheckCircle2, description: "Evaluation" },
-];
+// 从契约模块派生步骤列表（阶段定义唯一点）
+const addieSteps = ADDIE_STAGES.map((s) => ({
+  ...s,
+  icon: STAGE_ICONS[s.id],
+}));
 
 // 数学学科分类
 const mathCategories = [
@@ -79,8 +79,8 @@ const grades = [
 
 export default function PrepPage() {
   // 状态管理
-  const [currentStep, setCurrentStep] = useState("analysis");
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [currentStep, setCurrentStep] = useState<PrepStage>("analysis");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputMessage, setInputMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [streamContent, setStreamContent] = useState("");
@@ -91,7 +91,8 @@ export default function PrepPage() {
     knowledgePoints: "",
     objectives: "",
   });
-  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  // 各阶段成果（阶段间信息传递的载体，随请求回传服务端）
+  const [stageOutputs, setStageOutputs] = useState<StageOutputs>({});
   const [activeTab, setActiveTab] = useState("wizard");
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -105,15 +106,15 @@ export default function PrepPage() {
   }, [messages, streamContent]);
 
   // 切换步骤
-  const goToStep = (stepId: string) => {
+  const goToStep = (stepId: PrepStage) => {
     setCurrentStep(stepId);
   };
 
-  // 调用AI分析API
-  const callAnalysisAPI = async (mode: string) => {
+  // 调用AI分析API（携带已完成阶段成果，实现阶段间信息传递）
+  const callAnalysisAPI = async (mode: PrepStage) => {
     setIsLoading(true);
     setStreamContent("");
-    
+
     try {
       const response = await fetch('/api/prep', {
         method: 'POST',
@@ -126,6 +127,7 @@ export default function PrepPage() {
           chapter: courseInfo.chapter,
           knowledgePoints: courseInfo.knowledgePoints.split(/[，,、]/).filter(Boolean),
           mode: mode,
+          priorOutputs: stageOutputs,
         }),
       });
 
@@ -154,9 +156,13 @@ export default function PrepPage() {
               if (data.content) {
                 setStreamContent(prev => prev + data.content);
               }
-              if (data.done && data.result) {
-                // 处理完成的JSON结果
-                handleAnalysisResult(data.result, mode);
+              if (data.done && typeof data.result === 'string') {
+                // 阶段成果落位：raw 完整保存，structured 由服务端提取（可能缺席）
+                const output = {
+                  raw: data.result as string,
+                  structured: (data.structured ?? undefined) as Record<string, unknown> | undefined,
+                };
+                setStageOutputs(prev => ({ ...prev, [mode]: output }));
               }
             } catch {
               // 忽略解析错误
@@ -173,23 +179,11 @@ export default function PrepPage() {
     }
   };
 
-  // 处理分析结果
-  const handleAnalysisResult = (result: Record<string, unknown>, mode: string) => {
-    if (mode === 'analysis' && result.knowledgePoints) {
-      setAnalysisResult({
-        knowledgePoints: (result.knowledgePoints as KnowledgePoint[]) || [],
-        teachingPoints: (result.teachingPoints as string[]) || [],
-        difficulties: (result.difficulties as string[]) || [],
-        misconceptions: (result.misconceptions as string[]) || [],
-      });
-    }
-  };
-
   // 发送消息到AI
   const sendMessageToAI = async () => {
     if (!inputMessage.trim() || isLoading) return;
     
-    const userMessage: Message = {
+    const userMessage: ChatMessage = {
       id: Date.now().toString(),
       role: "user",
       content: inputMessage,
@@ -278,9 +272,45 @@ export default function PrepPage() {
     }
   };
 
-  // 获取当前步骤索引
+  // 获取当前步骤索引（以是否已有阶段成果判定完成度——真实进度）
   const currentStepIndex = addieSteps.findIndex(s => s.id === currentStep);
   const progress = ((currentStepIndex + 1) / addieSteps.length) * 100;
+  const completedCount = addieSteps.filter(s => stageOutputs[s.id]).length;
+
+  // 各阶段渲染数据
+  const analysisSummary: AnalysisSummary | null = parseAnalysisSummary(
+    stageOutputs.analysis?.structured
+  );
+  const analysisRaw = stageOutputs.analysis ? stripJsonBlock(stageOutputs.analysis.raw) : "";
+
+  // 保存教案：将五阶段成果拼接下载为 Markdown
+  const handleSaveLessonPlan = () => {
+    const parts = addieSteps
+      .filter(s => stageOutputs[s.id])
+      .map(s => `# ${s.label}阶段（${s.en}）\n\n${stripJsonBlock(stageOutputs[s.id]!.raw)}`);
+    if (parts.length === 0) {
+      toast.error("还没有任何阶段成果，请先完成备课流程");
+      return;
+    }
+    const md = `# ${courseInfo.chapter || "备课教案"}（${courseInfo.grade}${courseInfo.subject}）\n\n${parts.join("\n\n---\n\n")}`;
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeName = (courseInfo.chapter || "教案").replace(/[\\/:*?"<>|]/g, "_");
+    link.href = url;
+    link.download = `${safeName}.md`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    toast.success("教案已保存为 Markdown 文件");
+  };
+
+  // 重新开始：清空五阶段成果
+  const handleRestart = () => {
+    setStageOutputs({});
+    setCurrentStep("analysis");
+    setStreamContent("");
+    toast.success("已重置，可重新开始备课");
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -387,24 +417,21 @@ export default function PrepPage() {
                     {addieSteps.map((step, index) => {
                       const Icon = step.icon;
                       const isActive = currentStep === step.id;
-                      const isCompleted = index < currentStepIndex;
-                      
+                      const isCompleted = !!stageOutputs[step.id];
+
                       return (
                         <button
                           key={step.id}
                           onClick={() => {
-                            if (index <= currentStepIndex || (step.id === 'analysis' && courseInfo.chapter)) {
+                            if (index <= completedCount || step.id === 'analysis') {
                               goToStep(step.id);
-                              if (step.id !== 'analysis' || !analysisResult) {
-                                // 延迟调用，避免阻塞
-                              }
                             }
                           }}
                           className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all text-left ${
                             isActive 
                               ? "bg-indigo-50 border border-indigo-200 dark:bg-indigo-950" 
                               : "hover:bg-slate-50 dark:hover:bg-slate-800"
-                          } ${index > currentStepIndex && step.id !== 'analysis' ? "opacity-50" : ""}`}
+                          } ${index > completedCount && step.id !== 'analysis' ? "opacity-50" : ""}`}
                         >
                           <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
                             isCompleted 
@@ -419,7 +446,7 @@ export default function PrepPage() {
                             <div className={`font-medium ${isActive ? "text-indigo-700 dark:text-indigo-300" : ""}`}>
                               {step.label}
                             </div>
-                            <div className="text-xs text-muted-foreground">{step.description}</div>
+                            <div className="text-xs text-muted-foreground">{step.en}</div>
                           </div>
                           {isActive && <ChevronRight className="ml-auto h-4 w-4 text-indigo-500" />}
                         </button>
@@ -457,7 +484,7 @@ export default function PrepPage() {
                           </div>
                         </div>
                       </div>
-                    ) : analysisResult ? (
+                    ) : analysisSummary ? (
                       <div className="space-y-6">
                         {/* 知识点图谱 */}
                         <div>
@@ -466,14 +493,14 @@ export default function PrepPage() {
                             知识点分析
                           </h3>
                           <div className="flex flex-wrap gap-2">
-                            {analysisResult.knowledgePoints.map((kp) => (
-                              <Badge 
-                                key={kp.id}
+                            {analysisSummary.knowledgePoints.map((kp, i) => (
+                              <Badge
+                                key={i}
                                 variant={kp.level === "core" ? "default" : "secondary"}
                                 className={`${
-                                  kp.level === "core" 
-                                    ? "bg-indigo-600" 
-                                    : kp.level === "important" 
+                                  kp.level === "core"
+                                    ? "bg-indigo-600"
+                                    : kp.level === "important"
                                       ? "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300"
                                       : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
                                 }`}
@@ -491,7 +518,7 @@ export default function PrepPage() {
                             教学要点
                           </h3>
                           <ul className="space-y-2">
-                            {analysisResult.teachingPoints.map((tp, i) => (
+                            {analysisSummary.teachingPoints.map((tp, i) => (
                               <li key={i} className="flex items-start gap-2">
                                 <span className="text-indigo-600 mt-1">•</span>
                                 <span>{tp}</span>
@@ -507,7 +534,7 @@ export default function PrepPage() {
                             教学难点
                           </h3>
                           <ul className="space-y-2">
-                            {analysisResult.difficulties.map((d, i) => (
+                            {analysisSummary.difficulties.map((d, i) => (
                               <li key={i} className="flex items-start gap-2">
                                 <span className="text-orange-600 mt-1">•</span>
                                 <span>{d}</span>
@@ -522,7 +549,7 @@ export default function PrepPage() {
                             学生常见误解
                           </h3>
                           <ul className="space-y-2 text-amber-800 dark:text-amber-300">
-                            {analysisResult.misconceptions.map((m, i) => (
+                            {analysisSummary.misconceptions.map((m, i) => (
                               <li key={i} className="flex items-start gap-2">
                                 <span>!</span>
                                 <span>{m}</span>
@@ -532,17 +559,35 @@ export default function PrepPage() {
                         </div>
 
                         <div className="flex gap-2">
-                          <Button 
+                          <Button
                             onClick={() => {
                               goToStep("design");
                               callAnalysisAPI('design');
-                            }} 
+                            }}
                             className="gap-2"
                           >
                             下一步：设计
                             <ChevronRight className="h-4 w-4" />
                           </Button>
                         </div>
+                      </div>
+                    ) : analysisRaw ? (
+                      <div className="space-y-4">
+                        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                          <div className="whitespace-pre-wrap text-sm prose prose-sm max-w-none">
+                            {analysisRaw}
+                          </div>
+                        </div>
+                        <Button
+                          onClick={() => {
+                            goToStep("design");
+                            callAnalysisAPI('design');
+                          }}
+                          className="gap-2"
+                        >
+                          下一步：设计
+                          <ChevronRight className="h-4 w-4" />
+                        </Button>
                       </div>
                     ) : (
                       <div className="text-center py-12 text-muted-foreground">
@@ -579,19 +624,19 @@ export default function PrepPage() {
                           </div>
                         </div>
                       </div>
-                    ) : streamContent ? (
+                    ) : stageOutputs.design ? (
                       <div className="space-y-4">
                         <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
                           <div className="whitespace-pre-wrap text-sm prose prose-sm max-w-none">
-                            {streamContent}
+                            {stripJsonBlock(stageOutputs.design.raw)}
                           </div>
                         </div>
                         <div className="flex gap-2">
-                          <Button 
+                          <Button
                             onClick={() => {
                               goToStep("development");
                               callAnalysisAPI('development');
-                            }} 
+                            }}
                             className="gap-2"
                           >
                             下一步：开发
@@ -602,7 +647,15 @@ export default function PrepPage() {
                     ) : (
                       <div className="text-center py-12 text-muted-foreground">
                         <Target className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                        <p>请先完成分析阶段</p>
+                        <p className="mb-4">基于分析成果生成教学设计</p>
+                        <Button
+                          className="gap-2"
+                          onClick={() => callAnalysisAPI('design')}
+                          disabled={isLoading || !courseInfo.chapter}
+                        >
+                          <Sparkles className="h-4 w-4" />
+                          生成设计方案
+                        </Button>
                       </div>
                     )}
                   </CardContent>
@@ -634,15 +687,15 @@ export default function PrepPage() {
                           </div>
                         </div>
                       </div>
-                    ) : streamContent ? (
+                    ) : stageOutputs.development ? (
                       <div className="space-y-4">
                         <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
                           <div className="whitespace-pre-wrap text-sm prose prose-sm max-w-none">
-                            {streamContent}
+                            {stripJsonBlock(stageOutputs.development.raw)}
                           </div>
                         </div>
                         <div className="flex gap-2">
-                          <Button onClick={() => goToStep("implementation")} className="gap-2">
+                          <Button onClick={() => { goToStep("implementation"); }} className="gap-2">
                             下一步：实施
                             <ChevronRight className="h-4 w-4" />
                           </Button>
@@ -651,7 +704,15 @@ export default function PrepPage() {
                     ) : (
                       <div className="text-center py-12 text-muted-foreground">
                         <Palette className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                        <p>请先完成前两步</p>
+                        <p className="mb-4">基于设计方案生成教案与习题</p>
+                        <Button
+                          className="gap-2"
+                          onClick={() => callAnalysisAPI('development')}
+                          disabled={isLoading || !courseInfo.chapter}
+                        >
+                          <Sparkles className="h-4 w-4" />
+                          生成教学资源
+                        </Button>
                       </div>
                     )}
                   </CardContent>
@@ -683,44 +744,38 @@ export default function PrepPage() {
                           </div>
                         </div>
                       </div>
-                    ) : (
-                      <div className="space-y-6">
-                        <div className="bg-blue-50 dark:bg-blue-950/30 p-4 rounded-lg">
-                          <h3 className="font-semibold text-blue-800 dark:text-blue-300 mb-3">
-                            课堂实施建议
-                          </h3>
-                          <ul className="space-y-2 text-blue-700 dark:text-blue-400">
-                            <li>• 开场用3分钟快速回顾上节课内容</li>
-                            <li>• 新课导入控制在5分钟内</li>
-                            <li>• 每个知识点讲解后留2分钟消化时间</li>
-                            <li>• 巡视时关注中等生和后进生的反应</li>
-                            <li>• 课堂总结不少于5分钟</li>
-                          </ul>
+                    ) : stageOutputs.implementation ? (
+                      <div className="space-y-4">
+                        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                          <div className="whitespace-pre-wrap text-sm prose prose-sm max-w-none">
+                            {stripJsonBlock(stageOutputs.implementation.raw)}
+                          </div>
                         </div>
-
-                        <div className="bg-green-50 dark:bg-green-950/30 p-4 rounded-lg">
-                          <h3 className="font-semibold text-green-800 dark:text-green-300 mb-3">
-                            师生互动点
-                          </h3>
-                          <ul className="space-y-2 text-green-700 dark:text-green-400">
-                            <li>• 概念讲解后提问，引导学生思考</li>
-                            <li>• 图像绘制后提问，观察学生发现</li>
-                            <li>• 例题完成后提问，探索其他解法</li>
-                          </ul>
-                        </div>
-
                         <div className="flex gap-2">
-                          <Button 
+                          <Button
                             onClick={() => {
                               goToStep("evaluation");
                               callAnalysisAPI('evaluation');
-                            }} 
+                            }}
                             className="gap-2"
                           >
                             下一步：评估
                             <ChevronRight className="h-4 w-4" />
                           </Button>
                         </div>
+                      </div>
+                    ) : (
+                      <div className="text-center py-12 text-muted-foreground">
+                        <Rocket className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                        <p className="mb-4">基于教案生成课堂实施建议</p>
+                        <Button
+                          className="gap-2"
+                          onClick={() => callAnalysisAPI('implementation')}
+                          disabled={isLoading || !courseInfo.chapter}
+                        >
+                          <Sparkles className="h-4 w-4" />
+                          生成实施建议
+                        </Button>
                       </div>
                     )}
                   </CardContent>
@@ -752,64 +807,37 @@ export default function PrepPage() {
                           </div>
                         </div>
                       </div>
-                    ) : (
-                      <div className="space-y-6">
-                        <div>
-                          <h3 className="font-semibold mb-3">评价方式</h3>
-                          <div className="grid grid-cols-2 gap-4">
-                            <div className="p-4 border rounded-lg">
-                              <div className="font-medium text-purple-600 mb-2">形成性评价</div>
-                              <ul className="text-sm space-y-1 text-muted-foreground">
-                                <li>• 课堂提问</li>
-                                <li>• 小组讨论</li>
-                                <li>• 即时练习</li>
-                                <li>• 课堂观察</li>
-                              </ul>
-                            </div>
-                            <div className="p-4 border rounded-lg">
-                              <div className="font-medium text-green-600 mb-2">总结性评价</div>
-                              <ul className="text-sm space-y-1 text-muted-foreground">
-                                <li>• 课后作业</li>
-                                <li>• 单元测试</li>
-                                <li>• 实践任务</li>
-                                <li>• 档案袋评价</li>
-                              </ul>
-                            </div>
+                    ) : stageOutputs.evaluation ? (
+                      <div className="space-y-4">
+                        <div className="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                          <div className="whitespace-pre-wrap text-sm prose prose-sm max-w-none">
+                            {stripJsonBlock(stageOutputs.evaluation.raw)}
                           </div>
                         </div>
 
-                        <div>
-                          <h3 className="font-semibold mb-3">教学反思</h3>
-                          <ul className="space-y-2">
-                            <li className="flex items-start gap-2">
-                              <span className="text-indigo-600 mt-1">?</span>
-                              <span>学生是否理解了核心概念？</span>
-                            </li>
-                            <li className="flex items-start gap-2">
-                              <span className="text-indigo-600 mt-1">?</span>
-                              <span>教学节奏是否合适？</span>
-                            </li>
-                            <li className="flex items-start gap-2">
-                              <span className="text-indigo-600 mt-1">?</span>
-                              <span>哪些学生需要额外关注？</span>
-                            </li>
-                          </ul>
-                        </div>
-
                         <div className="flex gap-2 flex-wrap">
-                          <Button className="gap-2">
+                          <Button className="gap-2" onClick={handleSaveLessonPlan}>
                             <Save className="h-4 w-4" />
-                            保存教案
+                            保存教案（Markdown）
                           </Button>
-                          <Button variant="outline" className="gap-2">
-                            <Download className="h-4 w-4" />
-                            导出Word
-                          </Button>
-                          <Button variant="outline" className="gap-2">
+                          <Button variant="outline" className="gap-2" onClick={handleRestart}>
                             <RotateCcw className="h-4 w-4" />
                             重新开始
                           </Button>
                         </div>
+                      </div>
+                    ) : (
+                      <div className="text-center py-12 text-muted-foreground">
+                        <CheckCircle2 className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                        <p className="mb-4">生成评估方案与教学反思建议</p>
+                        <Button
+                          className="gap-2"
+                          onClick={() => callAnalysisAPI('evaluation')}
+                          disabled={isLoading || !courseInfo.chapter}
+                        >
+                          <Sparkles className="h-4 w-4" />
+                          生成评估方案
+                        </Button>
                       </div>
                     )}
                   </CardContent>

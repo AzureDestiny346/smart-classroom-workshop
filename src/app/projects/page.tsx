@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { ADDIE_STAGES } from "@/lib/prep-stages";
 import {
   deleteProject,
   duplicateProject,
@@ -382,23 +383,21 @@ export default function ProjectsPage() {
                       {/* ADDIE进度 */}
                       <div className="mt-4">
                         <div className="flex gap-1">
-                          {(["analysis", "design", "development", "implementation", "evaluation"] as const).map((step) => (
+                          {ADDIE_STAGES.map((stage) => (
                             <div
-                              key={step}
+                              key={stage.id}
                               className={`h-1.5 flex-1 rounded-full ${
-                                project.steps.includes(step) 
-                                  ? "bg-indigo-500" 
+                                project.steps.includes(stage.id)
+                                  ? "bg-indigo-500"
                                   : "bg-slate-200 dark:bg-slate-700"
                               }`}
                             />
                           ))}
                         </div>
                         <div className="flex justify-between mt-1 text-xs text-muted-foreground">
-                          <span>A</span>
-                          <span>D</span>
-                          <span>D</span>
-                          <span>I</span>
-                          <span>E</span>
+                          {ADDIE_STAGES.map((stage) => (
+                            <span key={stage.id}>{stage.en[0]}</span>
+                          ))}
                         </div>
                       </div>
                     </CardContent>

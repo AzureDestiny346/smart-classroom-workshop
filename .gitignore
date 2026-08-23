@@ -98,3 +98,7 @@ Desktop.ini
 .turbo
 
 .coze-logs
+
+# graphify 知识图谱产物（可由 /graphify 再生）
+graphify-out/
+src/graphify-out/

@@ -5,13 +5,7 @@
  * 后续迁移云端时只需保持本模块接口不变、替换实现。
  */
 
-/** ADDIE 教学设计五阶段标识 */
-export type PrepStage =
-  | "analysis"
-  | "design"
-  | "development"
-  | "implementation"
-  | "evaluation";
+import { STAGE_IDS, type PrepStage } from "./prep-stages";
 
 /** 备课项目实体：教师围绕一个课程章节开展的完整备课工作 */
 export interface PrepProject {
@@ -52,15 +46,6 @@ export function formatDateTime(iso: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** ADDIE 全部合法阶段，用于归一化时过滤非法值 */
-const VALID_STAGES: PrepStage[] = [
-  "analysis",
-  "design",
-  "development",
-  "implementation",
-  "evaluation",
-];
-
 /**
  * 宽容归一化：字段缺失或类型异常时回退默认值。
  * 历史数据/异常数据不会让列表页在 steps.includes 等调用处抛错白屏。
@@ -77,7 +62,7 @@ function normalizeProject(raw: Record<string, unknown>): PrepProject {
     status: raw.status === "已完成" ? "已完成" : "进行中",
     steps: Array.isArray(raw.steps)
       ? raw.steps.filter((s): s is PrepStage =>
-          VALID_STAGES.includes(s as PrepStage)
+          (STAGE_IDS as readonly string[]).includes(s as PrepStage)
         )
       : [],
     favorite: raw.favorite === true,
