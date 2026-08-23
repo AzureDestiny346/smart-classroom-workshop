@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { 
   FolderKanban, 
   Plus,
@@ -43,54 +45,16 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-
-// 模拟项目数据
-const mockProjects = [
-  {
-    id: "1",
-    title: "二次函数图像与性质",
-    subject: "初三数学",
-    chapter: "二次函数",
-    status: "进行中",
-    updatedAt: "2024-01-15 14:30",
-    createdAt: "2024-01-10 09:00",
-    steps: ["analysis", "design", "development"],
-    favorite: true,
-  },
-  {
-    id: "2",
-    title: "三角函数诱导公式",
-    subject: "高一数学",
-    chapter: "三角函数",
-    status: "已完成",
-    updatedAt: "2024-01-14 16:20",
-    createdAt: "2024-01-08 10:00",
-    steps: ["analysis", "design", "development", "implementation", "evaluation"],
-    favorite: false,
-  },
-  {
-    id: "3",
-    title: "立体几何初步",
-    subject: "高二数学",
-    chapter: "空间几何体",
-    status: "已完成",
-    updatedAt: "2024-01-12 11:00",
-    createdAt: "2024-01-05 08:30",
-    steps: ["analysis", "design", "development", "implementation", "evaluation"],
-    favorite: true,
-  },
-  {
-    id: "4",
-    title: "概率的基本性质",
-    subject: "高三数学",
-    chapter: "概率",
-    status: "进行中",
-    updatedAt: "2024-01-13 09:45",
-    createdAt: "2024-01-11 14:00",
-    steps: ["analysis", "design"],
-    favorite: false,
-  },
-];
+import {
+  deleteProject,
+  duplicateProject,
+  exportProject,
+  formatDateTime,
+  getAllProjects,
+  saveProject,
+  toggleFavorite,
+  type PrepProject,
+} from "@/lib/storage";
 
 // 学科分类
 const subjects = [
@@ -102,10 +66,23 @@ const subjects = [
   { value: "math-g12", label: "高三数学" },
 ];
 
+/** 学科下拉值 → 展示名 */
+const subjectLabel = (value: string) =>
+  subjects.find((s) => s.value === value)?.label ?? value;
+
 export default function ProjectsPage() {
+  const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [showNewDialog, setShowNewDialog] = useState(false);
+  const [projects, setProjects] = useState<PrepProject[]>([]);
+
+  // 客户端挂载后从 localStorage 加载，避免 SSR 阶段访问浏览器 API
+  useEffect(() => {
+    setProjects(getAllProjects());
+  }, []);
+
+  const refresh = () => setProjects(getAllProjects());
   
   // 新建项目表单
   const [newProject, setNewProject] = useState({
@@ -115,15 +92,85 @@ export default function ProjectsPage() {
     description: "",
   });
 
+  // 创建项目并跳转备课中心
+  const handleCreateProject = () => {
+    if (!newProject.title.trim()) {
+      toast.error("请填写项目名称");
+      return;
+    }
+    if (!newProject.subject) {
+      toast.error("请选择学科和年级");
+      return;
+    }
+    if (!newProject.chapter.trim()) {
+      toast.error("请填写章节/主题");
+      return;
+    }
+    saveProject({
+      title: newProject.title.trim(),
+      subject: subjectLabel(newProject.subject),
+      chapter: newProject.chapter.trim(),
+      description: newProject.description.trim(),
+      status: "进行中",
+      steps: [],
+      favorite: false,
+    });
+    toast.success("项目创建成功，开始智能备课！");
+    setShowNewDialog(false);
+    setNewProject({ title: "", subject: "", chapter: "", description: "" });
+    router.push("/prep");
+  };
+
+  const handleToggleFavorite = (id: string) => {
+    const favored = toggleFavorite(id);
+    refresh();
+    toast.success(favored ? "已收藏" : "已取消收藏");
+  };
+
+  const handleDuplicate = (id: string) => {
+    const copy = duplicateProject(id);
+    if (copy) {
+      refresh();
+      toast.success("项目已复制");
+    } else {
+      toast.error("复制失败");
+    }
+  };
+
+  const handleDelete = (id: string) => {
+    deleteProject(id);
+    refresh();
+    toast.success("项目已删除");
+  };
+
+  // 导出为 JSON 文件下载
+  const handleExport = (project: PrepProject) => {
+    const blob = new Blob([exportProject(project)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${project.title}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    toast.success("项目已导出");
+  };
+
   // 过滤项目
-  const filteredProjects = mockProjects.filter(project => {
+  const filteredProjects = projects.filter(project => {
     const matchesSearch = project.title.includes(searchQuery) || project.subject.includes(searchQuery);
     const matchesStatus = filterStatus === "all" || project.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
 
   // 获取收藏项目
-  const favoriteProjects = mockProjects.filter(p => p.favorite);
+  const favoriteProjects = projects.filter(p => p.favorite);
+
+  // 最近编辑：按更新时间倒序取前 6
+  const recentProjects = [...projects]
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .slice(0, 6);
 
   // 格式化时间
   const formatTime = (time: string) => {
@@ -135,7 +182,7 @@ export default function ProjectsPage() {
     if (hours < 1) return "刚刚";
     if (hours < 24) return `${hours}小时前`;
     if (hours < 48) return "昨天";
-    return time;
+    return formatDateTime(time);
   };
 
   return (
@@ -212,10 +259,7 @@ export default function ProjectsPage() {
                 </div>
                 <Button 
                   className="w-full gap-2"
-                  onClick={() => {
-                    // 创建项目逻辑
-                    setShowNewDialog(false);
-                  }}
+                  onClick={handleCreateProject}
                 >
                   <Sparkles className="h-4 w-4" />
                   开始智能备课
@@ -276,29 +320,24 @@ export default function ProjectsPage() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => router.push("/prep")}>
                               <FileText className="h-4 w-4 mr-2" />
                               打开
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => {
-                              const p = mockProjects.find(x => x.id === project.id);
-                              if (p) {
-                                p.favorite = !p.favorite;
-                              }
-                            }}>
+                            <DropdownMenuItem onClick={() => handleToggleFavorite(project.id)}>
                               <Star className="h-4 w-4 mr-2" />
                               {project.favorite ? "取消收藏" : "收藏"}
                             </DropdownMenuItem>
-                            <DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleDuplicate(project.id)}>
                               <Copy className="h-4 w-4 mr-2" />
                               复制项目
                             </DropdownMenuItem>
-                            <DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleExport(project)}>
                               <Download className="h-4 w-4 mr-2" />
                               导出
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem className="text-destructive">
+                            <DropdownMenuItem className="text-destructive" onClick={() => handleDelete(project.id)}>
                               <Trash2 className="h-4 w-4 mr-2" />
                               删除
                             </DropdownMenuItem>
@@ -323,7 +362,7 @@ export default function ProjectsPage() {
                       {/* ADDIE进度 */}
                       <div className="mt-4">
                         <div className="flex gap-1">
-                          {["analysis", "design", "development", "implementation", "evaluation"].map((step, i) => (
+                          {(["analysis", "design", "development", "implementation", "evaluation"] as const).map((step, i) => (
                             <div
                               key={step}
                               className={`h-1.5 flex-1 rounded-full ${
@@ -389,10 +428,9 @@ export default function ProjectsPage() {
           </TabsContent>
 
           <TabsContent value="recent">
+            {recentProjects.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {mockProjects
-                .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-                .slice(0, 6)
+              {recentProjects
                 .map(project => (
                   <Card key={project.id} className="card-hover cursor-pointer">
                     <CardHeader className="pb-2">
@@ -413,6 +451,15 @@ export default function ProjectsPage() {
                   </Card>
                 ))}
             </div>
+            ) : (
+              <div className="text-center py-12 text-muted-foreground">
+                <Clock className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p>暂无项目记录，先创建一个备课项目吧</p>
+                <Button variant="link" onClick={() => setShowNewDialog(true)}>
+                  创建新项目
+                </Button>
+              </div>
+            )}
           </TabsContent>
         </Tabs>
       </div>
