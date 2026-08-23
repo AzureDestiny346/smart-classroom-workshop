@@ -13,16 +13,25 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@v4
 
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
       - name: 安装 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18 # 和你的项目版本一致，18/20都可以
+          node-version: 20
+          cache: 'pnpm'
 
-      - name: 安装依赖（用npm代替pnpm）
-        run: npm install
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查
+        run: pnpm ts-check
 
       - name: 构建项目
-        run: npm run build
+        run: pnpm run build
 
       - name: 部署到 Vercel
         uses: amondnet/vercel-action@v25
