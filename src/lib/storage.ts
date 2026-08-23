@@ -32,7 +32,7 @@ export interface PrepProject {
   updatedAt: string;
 }
 
-const STORAGE_KEY = "smart-classroom-projects";
+const STORAGE_KEY = "zhike.v1.projects";
 
 /** 判断 localStorage 是否可用（SSR 预渲染与隐私模式下不可用） */
 function isStorageAvailable(): boolean {
