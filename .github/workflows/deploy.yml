@@ -1,4 +1,4 @@
-name: Deploy to Vercel
+name: CI
 
 on:
   push:
@@ -30,13 +30,11 @@ jobs:
       - name: 类型检查
         run: pnpm ts-check
 
+      - name: 代码检查
+        run: pnpm lint
+
       - name: 构建项目
         run: pnpm run build
 
-      - name: 部署到 Vercel
-        uses: amondnet/vercel-action@v25
-        with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          vercel-args: '--prod'
+      # 生产部署走 Vercel Git 集成（vercel.json 已就位），
+      # 不在此 workflow 配置 VERCEL_TOKEN 等 secrets。

@@ -150,7 +150,7 @@ export default function HomePage() {
         <div className="text-center mb-12">
           <h2 className="text-3xl font-bold mb-4">为什么选择智课工坊？</h2>
           <p className="text-muted-foreground max-w-2xl mx-auto">
-            我们不仅提供工具，更提供经过验证的方法论，帮助您从"会用AI"到"善用AI"
+            我们不仅提供工具，更提供经过验证的方法论，帮助您从“会用AI”到“善用AI”
           </p>
         </div>
         

@@ -839,7 +839,7 @@ export default function PrepPage() {
                         <MessageSquare className="h-12 w-12 mx-auto mb-4 opacity-50" />
                         <p>开始与AI助手对话吧！</p>
                         <p className="text-sm mt-2">
-                          可以问："帮我设计这节课的导入环节"
+                          可以问：“帮我设计这节课的导入环节”
                         </p>
                       </div>
                     )}
@@ -931,9 +931,9 @@ export default function PrepPage() {
                   <CardTitle className="text-lg">数学GAI提示词技巧</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm text-muted-foreground">
-                  <p>1. 明确指定知识点，如"一元二次方程的求根公式"</p>
+                  <p>1. 明确指定知识点，如“一元二次方程的求根公式”</p>
                   <p>2. 说明学生年级，便于AI调整难度</p>
-                  <p>3. 询问具体环节，如"课堂导入"而非泛泛的"教学方法"</p>
+                  <p>3. 询问具体环节，如“课堂导入”而非泛泛的“教学方法”</p>
                   <p>4. 可以要求AI给出多个方案选择</p>
                 </CardContent>
               </Card>
