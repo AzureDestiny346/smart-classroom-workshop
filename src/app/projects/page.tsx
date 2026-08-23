@@ -76,6 +76,8 @@ export default function ProjectsPage() {
   const [filterStatus, setFilterStatus] = useState("all");
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [projects, setProjects] = useState<PrepProject[]>([]);
+  // 待确认删除的项目（null = 确认对话框关闭）
+  const [deleteTarget, setDeleteTarget] = useState<PrepProject | null>(null);
 
   // 客户端挂载后从 localStorage 加载，避免 SSR 阶段访问浏览器 API
   useEffect(() => {
@@ -106,7 +108,7 @@ export default function ProjectsPage() {
       toast.error("请填写章节/主题");
       return;
     }
-    saveProject({
+    const saved = saveProject({
       title: newProject.title.trim(),
       subject: subjectLabel(newProject.subject),
       chapter: newProject.chapter.trim(),
@@ -115,16 +117,25 @@ export default function ProjectsPage() {
       steps: [],
       favorite: false,
     });
+    if (!saved) {
+      toast.error("项目保存失败：本地存储不可用或已满");
+      return;
+    }
     toast.success("项目创建成功，开始智能备课！");
     setShowNewDialog(false);
     setNewProject({ title: "", subject: "", chapter: "", description: "" });
-    router.push("/prep");
+    // 携带项目 id，备课中心阶段二接线后即可回读课程信息
+    router.push(`/prep?project=${saved.id}`);
   };
 
   const handleToggleFavorite = (id: string) => {
     const favored = toggleFavorite(id);
     refresh();
-    toast.success(favored ? "已收藏" : "已取消收藏");
+    if (favored === null) {
+      toast.error("操作失败：项目不存在或本地存储不可用");
+    } else {
+      toast.success(favored ? "已收藏" : "已取消收藏");
+    }
   };
 
   const handleDuplicate = (id: string) => {
@@ -137,10 +148,16 @@ export default function ProjectsPage() {
     }
   };
 
-  const handleDelete = (id: string) => {
-    deleteProject(id);
-    refresh();
-    toast.success("项目已删除");
+  // 确认后真正执行删除
+  const handleConfirmDelete = () => {
+    if (!deleteTarget) return;
+    if (deleteProject(deleteTarget.id)) {
+      refresh();
+      toast.success("项目已删除");
+    } else {
+      toast.error("删除失败：本地存储不可用");
+    }
+    setDeleteTarget(null);
   };
 
   // 导出为 JSON 文件下载
@@ -151,9 +168,12 @@ export default function ProjectsPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${project.title}.json`;
+    // 清洗 Windows 文件名非法字符，避免下载名异常
+    const safeName = project.title.replace(/[\\/:*?"<>|]/g, "_");
+    link.download = `${safeName}.json`;
     link.click();
-    URL.revokeObjectURL(url);
+    // Safari 下同步 revoke 会截断下载，延迟到下一轮事件循环
+    setTimeout(() => URL.revokeObjectURL(url), 0);
     toast.success("项目已导出");
   };
 
@@ -320,7 +340,7 @@ export default function ProjectsPage() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => router.push("/prep")}>
+                            <DropdownMenuItem onClick={() => router.push(`/prep?project=${project.id}`)}>
                               <FileText className="h-4 w-4 mr-2" />
                               打开
                             </DropdownMenuItem>
@@ -337,7 +357,7 @@ export default function ProjectsPage() {
                               导出
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem className="text-destructive" onClick={() => handleDelete(project.id)}>
+                            <DropdownMenuItem className="text-destructive" onClick={() => setDeleteTarget(project)}>
                               <Trash2 className="h-4 w-4 mr-2" />
                               删除
                             </DropdownMenuItem>
@@ -362,7 +382,7 @@ export default function ProjectsPage() {
                       {/* ADDIE进度 */}
                       <div className="mt-4">
                         <div className="flex gap-1">
-                          {(["analysis", "design", "development", "implementation", "evaluation"] as const).map((step, i) => (
+                          {(["analysis", "design", "development", "implementation", "evaluation"] as const).map((step) => (
                             <div
                               key={step}
                               className={`h-1.5 flex-1 rounded-full ${
@@ -462,6 +482,26 @@ export default function ProjectsPage() {
             )}
           </TabsContent>
         </Tabs>
+
+        {/* 删除确认对话框：本地数据无回收站，误删不可恢复 */}
+        <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>删除项目</DialogTitle>
+              <DialogDescription>
+                确定要删除“{deleteTarget?.title}”吗？本地保存的该项目数据将无法恢复。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+                取消
+              </Button>
+              <Button variant="destructive" onClick={handleConfirmDelete}>
+                确认删除
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );

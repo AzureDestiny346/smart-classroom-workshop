@@ -52,6 +52,40 @@ export function formatDateTime(iso: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/** ADDIE 全部合法阶段，用于归一化时过滤非法值 */
+const VALID_STAGES: PrepStage[] = [
+  "analysis",
+  "design",
+  "development",
+  "implementation",
+  "evaluation",
+];
+
+/**
+ * 宽容归一化：字段缺失或类型异常时回退默认值。
+ * 历史数据/异常数据不会让列表页在 steps.includes 等调用处抛错白屏。
+ */
+function normalizeProject(raw: Record<string, unknown>): PrepProject {
+  const str = (v: unknown, fallback = "") =>
+    typeof v === "string" ? v : fallback;
+  return {
+    id: str(raw.id),
+    title: str(raw.title),
+    subject: str(raw.subject),
+    chapter: str(raw.chapter),
+    description: str(raw.description),
+    status: raw.status === "已完成" ? "已完成" : "进行中",
+    steps: Array.isArray(raw.steps)
+      ? raw.steps.filter((s): s is PrepStage =>
+          VALID_STAGES.includes(s as PrepStage)
+        )
+      : [],
+    favorite: raw.favorite === true,
+    createdAt: str(raw.createdAt, new Date(0).toISOString()),
+    updatedAt: str(raw.updatedAt, new Date(0).toISOString()),
+  };
+}
+
 /** 从 localStorage 读取全部项目；数据损坏时重置为空列表而不是抛错 */
 export function getAllProjects(): PrepProject[] {
   if (!isStorageAvailable()) return [];
@@ -60,13 +94,15 @@ export function getAllProjects(): PrepProject[] {
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item): item is PrepProject =>
-        typeof item === "object" &&
-        item !== null &&
-        typeof (item as PrepProject).id === "string" &&
-        typeof (item as PrepProject).title === "string"
-    );
+    return parsed
+      .filter(
+        (item): item is Record<string, unknown> =>
+          typeof item === "object" &&
+          item !== null &&
+          typeof (item as Record<string, unknown>).id === "string" &&
+          typeof (item as Record<string, unknown>).title === "string"
+      )
+      .map(normalizeProject);
   } catch {
     // JSON 解析失败说明存储损坏，清空重来
     window.localStorage.removeItem(STORAGE_KEY);
@@ -79,11 +115,11 @@ export function getProject(id: string): PrepProject | null {
   return getAllProjects().find((p) => p.id === id) ?? null;
 }
 
-/** 新建或更新项目（存在同 id 则覆盖），返回保存后的项目 */
+/** 新建或更新项目（存在同 id 则覆盖）；返回保存后的项目，写入失败返回 null */
 export function saveProject(
   project: Omit<PrepProject, "id" | "createdAt" | "updatedAt"> &
     Partial<Pick<PrepProject, "id" | "createdAt" | "updatedAt">>
-): PrepProject {
+): PrepProject | null {
   const now = new Date().toISOString();
   const full: PrepProject = {
     ...project,
@@ -98,24 +134,22 @@ export function saveProject(
   } else {
     projects.unshift(full);
   }
-  persist(projects);
-  return full;
+  return persist(projects) ? full : null;
 }
 
-/** 删除项目 */
-export function deleteProject(id: string): void {
-  persist(getAllProjects().filter((p) => p.id !== id));
+/** 删除项目，返回是否成功落盘 */
+export function deleteProject(id: string): boolean {
+  return persist(getAllProjects().filter((p) => p.id !== id));
 }
 
-/** 切换收藏状态，返回切换后的状态 */
-export function toggleFavorite(id: string): boolean {
+/** 切换收藏状态：返回切换后的状态；null 表示项目不存在或写入失败 */
+export function toggleFavorite(id: string): boolean | null {
   const projects = getAllProjects();
   const target = projects.find((p) => p.id === id);
-  if (!target) return false;
+  if (!target) return null;
   target.favorite = !target.favorite;
   target.updatedAt = new Date().toISOString();
-  persist(projects);
-  return target.favorite;
+  return persist(projects) ? target.favorite : null;
 }
 
 /** 复制项目为新项目（标题加"副本"后缀），返回新项目 */
@@ -137,11 +171,18 @@ export function exportProject(project: PrepProject): string {
   return JSON.stringify(project, null, 2);
 }
 
-function persist(projects: PrepProject[]): void {
-  if (!isStorageAvailable()) return;
+/** 写入存储；返回是否成功（配额满/隐私模式等场景会失败，调用方需感知） */
+function persist(projects: PrepProject[]): boolean {
+  if (!isStorageAvailable()) {
+    console.warn("[storage] localStorage 不可用，本次修改未保存");
+    return false;
+  }
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
-  } catch {
-    // 存储空间不足等异常时静默失败，不影响页面使用
+    return true;
+  } catch (error) {
+    // 配额满或被禁用时明确警告，避免"以为存了其实没存"
+    console.warn("[storage] 写入失败（可能配额已满或被禁用）:", error);
+    return false;
   }
 }
