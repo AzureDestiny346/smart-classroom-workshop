@@ -18,6 +18,9 @@ export async function POST(request: NextRequest) {
     const customHeaders = HeaderUtils.extractForwardHeaders(request.headers);
     const client = new LLMClient(undefined, customHeaders);
 
+    // LLM_MODEL 可在 .env.local 覆盖默认模型（端点与模型需配套，如 DashScope + qwen-plus）
+    const llmConfig = process.env.LLM_MODEL ? { model: process.env.LLM_MODEL } : undefined;
+
     const lastMessage = messages[messages.length - 1];
     const userMessage = lastMessage.content;
 
@@ -56,7 +59,7 @@ export async function POST(request: NextRequest) {
       const streamData = new ReadableStream({
         async start(controller) {
           try {
-            for await (const chunk of client.stream(chatMessages)) {
+            for await (const chunk of client.stream(chatMessages, llmConfig)) {
               if (chunk.content) {
                 controller.enqueue(
                   encoder.encode(`data: ${JSON.stringify({ content: chunk.content })}\n\n`)
@@ -65,7 +68,11 @@ export async function POST(request: NextRequest) {
             }
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
           } catch (error) {
-            controller.error(error);
+            // 以错误帧收尾而非掐断流：前端能给出明确提示而不是静默空白
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ error: 'AI 服务暂时不可用，请稍后重试' })}\n\n`)
+            );
+            console.error('Chat stream error:', error);
           } finally {
             controller.close();
           }
@@ -81,7 +88,7 @@ export async function POST(request: NextRequest) {
       });
     } else {
       // 非流式响应
-      const result = await client.invoke(chatMessages);
+      const result = await client.invoke(chatMessages, llmConfig);
       return NextResponse.json({
         content: result?.content || '',
       });
