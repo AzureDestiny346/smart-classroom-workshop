@@ -197,10 +197,21 @@ describe("saveProjectProgress：写回派生与覆盖语义", () => {
     seedV2Project();
     expect(saveProjectProgress("ghost", { stageOutputs: {} })).toBe(false);
   });
+
+  it("落盘失败（setItem 抛错）时返回 false 而不是抛出", () => {
+    seedV2Project();
+    const win = (
+      globalThis as unknown as { window: { localStorage: MemoryStorage } }
+    ).window;
+    win.localStorage.setItem = () => {
+      throw new Error("QuotaExceededError");
+    };
+    expect(saveProjectProgress("p1", { stageOutputs: {} })).toBe(false);
+  });
 });
 
 describe("saveProject：v2 新建路径", () => {
-  it("以 v2 字段创建项目并持久化", () => {
+  it("以 v2 字段创建项目，steps/status 由成果派生（空成果 → 空步骤、进行中）", () => {
     const saved = saveProject({
       title: "二次函数图像",
       grade: "九年级",
@@ -208,13 +219,28 @@ describe("saveProject：v2 新建路径", () => {
       chapter: "二次函数",
       description: "",
       knowledgePoints: ["图像"],
-      status: "进行中",
-      steps: [],
       favorite: false,
       stageOutputs: {},
     });
     expect(saved).not.toBeNull();
     expect(saved?.grade).toBe("九年级");
+    expect(saved?.steps).toEqual([]);
+    expect(saved?.status).toBe("进行中");
     expect(getAllProjects()).toHaveLength(1);
+  });
+
+  it("创建时携带成果：入参不收 steps/status，派生值生效", () => {
+    const saved = saveProject({
+      title: "带成果新建",
+      grade: "高三",
+      subjectArea: "函数",
+      chapter: "导数",
+      description: "",
+      knowledgePoints: [],
+      favorite: false,
+      stageOutputs: { analysis: { raw: "# 分析" } },
+    });
+    expect(saved?.steps).toEqual(["analysis"]);
+    expect(saved?.status).toBe("进行中");
   });
 });

@@ -121,8 +121,6 @@ export default function ProjectsPage() {
         .split(/[，,、]/)
         .map((k) => k.trim())
         .filter(Boolean),
-      status: "进行中",
-      steps: [],
       favorite: false,
       stageOutputs: {},
     });

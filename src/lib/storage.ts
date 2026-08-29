@@ -177,14 +177,19 @@ export function getProject(id: string): PrepProject | null {
   return getAllProjects().find((p) => p.id === id) ?? null;
 }
 
-/** 新建或更新项目（存在同 id 则覆盖）；返回保存后的项目，写入失败返回 null */
+/**
+ * 新建或更新项目（存在同 id 则覆盖）；返回保存后的项目，写入失败返回 null。
+ * steps/status 一律由 stageOutputs 派生（单一事实来源），入参不接收。
+ */
 export function saveProject(
-  project: Omit<PrepProject, "id" | "createdAt" | "updatedAt"> &
+  project: Omit<PrepProject, "id" | "createdAt" | "updatedAt" | "steps" | "status"> &
     Partial<Pick<PrepProject, "id" | "createdAt" | "updatedAt">>
 ): PrepProject | null {
   const now = new Date().toISOString();
   const full: PrepProject = {
     ...project,
+    steps: deriveSteps(project.stageOutputs),
+    status: deriveStatus(project.stageOutputs),
     id: project.id ?? generateId(),
     createdAt: project.createdAt ?? now,
     updatedAt: now,

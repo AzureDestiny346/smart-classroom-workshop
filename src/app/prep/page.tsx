@@ -109,6 +109,8 @@ function PrepPageContent() {
   const [activeTab, setActiveTab] = useState("wizard");
   // 续备上下文（ADR-0004）：绑定的备课项目 id，null = 游离备课
   const [showRestartConfirm, setShowRestartConfirm] = useState(false);
+  // 续备项目标题（仅供确认文案展示），游离备课为 null
+  const [resumeProjectTitle, setResumeProjectTitle] = useState<string | null>(null);
   // ref 镜像：SSE 回调与去抖回调中读取最新值，避免闭包过期
   const projectIdRef = useRef<string | null>(null);
   const stageOutputsRef = useRef<StageOutputs>({});
@@ -141,14 +143,16 @@ function PrepPageContent() {
     projectIdRef.current = id;
     setStageOutputs(project.stageOutputs);
     stageOutputsRef.current = project.stageOutputs;
+    // 逐字透传迁移后的原值：不伪造回退值，避免去抖写回污染项目源数据
     const nextCourse = {
-      subjectArea: project.subjectArea || "数学",
-      grade: grades.some((g) => g.value === project.grade) ? project.grade : "九年级",
+      subjectArea: project.subjectArea,
+      grade: project.grade,
       chapter: project.chapter,
       knowledgePoints: project.knowledgePoints.join("，"),
     };
     setCourseInfo(nextCourse);
     courseSnapshotRef.current = JSON.stringify(nextCourse);
+    setResumeProjectTitle(project.title);
     // 跳到第一个未完成阶段；全部完成则停在评估
     const firstIncomplete = ADDIE_STAGES.find(
       (s) => !project.stageOutputs[s.id]?.raw.trim()
@@ -1071,7 +1075,9 @@ function PrepPageContent() {
             <DialogHeader>
               <DialogTitle>重新开始备课</DialogTitle>
               <DialogDescription>
-                当前备课绑定了一个项目，重新开始将同时清空该项目中的全部阶段成果，且无法恢复。确定继续吗？
+                当前备课绑定了项目
+                {resumeProjectTitle ? `《${resumeProjectTitle}》` : ""}
+                ，重新开始将同时清空该项目中的全部阶段成果，且无法恢复。确定继续吗？
               </DialogDescription>
             </DialogHeader>
             <div className="flex justify-end gap-2">
