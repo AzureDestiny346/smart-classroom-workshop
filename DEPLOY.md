@@ -58,79 +58,49 @@ vercel --prod
 3. 配置构建命令：`pnpm build`
 4. 点击 Deploy
 
-## 方式三：Docker 部署
+## 方式三：Docker 部署（仓库已内置 Dockerfile）
 
-### 1. 创建 Dockerfile
+仓库根目录的 `Dockerfile` 与 `.dockerignore` 已对齐项目真实构建管线：`node:20-alpine` 多阶段构建，`next build` + tsup 产物 `dist/server.js`（自定义服务器，`COZE_PROJECT_ENV=PROD` 生产模式），runner 仅装生产依赖，**镜像约 824MB**。
 
-```dockerfile
-# Dockerfile
-FROM node:18-alpine AS base
-
-# 安装 pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
-WORKDIR /app
-
-# 复制依赖文件
-COPY package.json pnpm-lock.yaml ./
-
-# 安装依赖
-RUN pnpm install --frozen-lockfile
-
-# 复制源码
-COPY . .
-
-# 构建
-RUN pnpm build
-
-# 生产镜像
-FROM node:18-alpine AS production
-
-WORKDIR /app
-
-COPY --from=base /app/.next/standalone ./
-COPY --from=base /app/.next/static ./.next/static
-COPY --from=base /app/public ./public
-
-EXPOSE 5000
-
-ENV PORT 5000
-ENV HOSTNAME "0.0.0.0"
-
-CMD ["node", "server.js"]
-```
-
-### 2. 创建 .dockerignore
-
-```dockerfile
-node_modules
-.next
-.git
-*.md
-.coze
-.vercel
-```
-
-### 3. 构建和运行
+### 1. 构建镜像
 
 ```bash
-# 构建镜像
-docker build -t zhike-studio .
-
-# 运行容器
-docker run -p 5000:5000 zhike-studio
-
-# 后台运行
-docker run -d -p 5000:5000 --name zhike-studio zhike-studio
+docker build -t zhike-workshop .
 ```
+
+### 2. 运行容器
+
+```bash
+# 运行时注入环境变量（.dockerignore 已确保 .env.local 不会进镜像）
+docker run -d \
+  --name zhike-app \
+  -p 5000:5000 \
+  --env-file .env.local \
+  zhike-workshop
+
+# 访问 http://localhost:5000
+```
+
+### 3. 修改代码后更新
+
+```bash
+docker build -t zhike-workshop . \
+  && docker rm -f zhike-app \
+  && docker run -d --name zhike-app -p 5000:5000 --env-file .env.local zhike-workshop
+```
+
+要点：
+
+- 运行入口是 `node dist/server.js`（`src/server.ts` 的 tsup 产物），不是 Next standalone 的 `server.js`——`next.config` 未开启 `output: 'standalone'`。
+- `--env-file .env.local` 负责注入 LLM 等运行时密钥，密钥永不写入 Dockerfile 或镜像层。
 
 ## 方式四：传统服务器部署
 
 ### Ubuntu/CentOS 服务器
 
 ```bash
-# 1. 安装 Node.js 18+
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+# 1. 安装 Node.js 20+（Next 16 要求）
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
 # 2. 安装 pnpm
@@ -196,18 +166,24 @@ pm2 startup
 
 ## 环境变量说明
 
-### 必需的环境变量
+### 生产环境（Vercel 项目设置 / Docker `--env-file` 注入）
 
 | 变量名 | 说明 | 示例值 |
 |--------|------|--------|
-| `COZE_PROJECT_DOMAIN_DEFAULT` | 公网访问域名 | `https://xxx.vercel.app` |
-| `DEPLOY_RUN_PORT` | 服务端口 | `5000` |
+| `NEXT_PUBLIC_APP_URL` | 应用公网地址（构建期烧录进客户端代码） | `https://your-app.vercel.app` |
+| `PORT` | 服务端口（Dockerfile 已内置 5000） | `5000` |
+| `COZE_WORKLOAD_IDENTITY_API_KEY` | LLM API Key（**密钥，仅运行时注入，勿提交**） | `<your-api-key>` |
+| `COZE_INTEGRATION_MODEL_BASE_URL` | OpenAI 兼容端点（以 `/v1` 结尾） | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `LLM_MODEL` | 模型名（须与端点配套：DashScope 用 qwen 系列） | `qwen-plus` |
+
+完整清单见 `.env.example`；`.dockerignore` 与 `.gitignore` 均已排除 `.env*`，密钥不会进入镜像或仓库。
 
 ### 本地开发 .env.local
 
 ```env
-# .env.local
+# 从 .env.example 复制后填写实际值
 NEXT_PUBLIC_APP_URL=http://localhost:5000
+PORT=5000
 ```
 
 ---
@@ -251,14 +227,17 @@ echo "✅ 部署完成！"
 
 echo "🚀 开始构建 Docker 镜像..."
 
-docker build -t zhike-studio:latest .
+docker build -t zhike-workshop:latest .
 
 echo "🚀 启动容器..."
+
+docker rm -f zhike-app 2>/dev/null || true
 docker run -d \
-  --name zhike-studio \
+  --name zhike-app \
   -p 5000:5000 \
+  --env-file .env.local \
   --restart unless-stopped \
-  zhike-studio:latest
+  zhike-workshop:latest
 
 echo "✅ 服务已启动！访问 http://localhost:5000"
 ```
@@ -285,7 +264,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: 'pnpm'
       
       - name: Install pnpm
