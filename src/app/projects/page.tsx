@@ -48,6 +48,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ADDIE_STAGES } from "@/lib/prep-stages";
 import {
   deleteProject,
+  displayCourseInfo,
   duplicateProject,
   exportProject,
   formatDateTime,
@@ -57,19 +58,15 @@ import {
   type PrepProject,
 } from "@/lib/storage";
 
-// 学科分类
-const subjects = [
-  { value: "math-g7", label: "七年级数学" },
-  { value: "math-g8", label: "八年级数学" },
-  { value: "math-g9", label: "九年级数学" },
-  { value: "math-g10", label: "高一数学" },
-  { value: "math-g11", label: "高二数学" },
-  { value: "math-g12", label: "高三数学" },
+// 学段选项（学科固定为数学，领域在备课中心细分）
+const gradeOptions = [
+  { value: "七年级", label: "七年级" },
+  { value: "八年级", label: "八年级" },
+  { value: "九年级", label: "九年级" },
+  { value: "高一", label: "高一" },
+  { value: "高二", label: "高二" },
+  { value: "高三", label: "高三" },
 ];
-
-/** 学科下拉值 → 展示名 */
-const subjectLabel = (value: string) =>
-  subjects.find((s) => s.value === value)?.label ?? value;
 
 export default function ProjectsPage() {
   const router = useRouter();
@@ -87,12 +84,13 @@ export default function ProjectsPage() {
 
   const refresh = () => setProjects(getAllProjects());
   
-  // 新建项目表单
+  // 新建项目表单（学科领域固定"数学"，领域细分在备课中心完成）
   const [newProject, setNewProject] = useState({
     title: "",
-    subject: "",
+    grade: "",
     chapter: "",
     description: "",
+    knowledgePoints: "",
   });
 
   // 创建项目并跳转备课中心
@@ -101,22 +99,32 @@ export default function ProjectsPage() {
       toast.error("请填写项目名称");
       return;
     }
-    if (!newProject.subject) {
-      toast.error("请选择学科和年级");
+    if (!newProject.grade) {
+      toast.error("请选择学段");
       return;
     }
     if (!newProject.chapter.trim()) {
       toast.error("请填写章节/主题");
       return;
     }
+    if (!newProject.knowledgePoints.trim()) {
+      toast.error("请填写核心知识点");
+      return;
+    }
     const saved = saveProject({
       title: newProject.title.trim(),
-      subject: subjectLabel(newProject.subject),
+      grade: newProject.grade,
+      subjectArea: "数学",
       chapter: newProject.chapter.trim(),
       description: newProject.description.trim(),
+      knowledgePoints: newProject.knowledgePoints
+        .split(/[，,、]/)
+        .map((k) => k.trim())
+        .filter(Boolean),
       status: "进行中",
       steps: [],
       favorite: false,
+      stageOutputs: {},
     });
     if (!saved) {
       toast.error("项目保存失败：本地存储不可用或已满");
@@ -124,7 +132,7 @@ export default function ProjectsPage() {
     }
     toast.success("项目创建成功，开始智能备课！");
     setShowNewDialog(false);
-    setNewProject({ title: "", subject: "", chapter: "", description: "" });
+    setNewProject({ title: "", grade: "", chapter: "", description: "", knowledgePoints: "" });
     // 携带项目 id，备课中心阶段二接线后即可回读课程信息
     router.push(`/prep?project=${saved.id}`);
   };
@@ -180,7 +188,7 @@ export default function ProjectsPage() {
 
   // 过滤项目
   const filteredProjects = projects.filter(project => {
-    const matchesSearch = project.title.includes(searchQuery) || project.subject.includes(searchQuery);
+    const matchesSearch = project.title.includes(searchQuery) || displayCourseInfo(project).includes(searchQuery);
     const matchesStatus = filterStatus === "all" || project.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
@@ -219,7 +227,7 @@ export default function ProjectsPage() {
               我的项目
             </h1>
             <p className="text-muted-foreground">
-              管理您的备课项目，支持版本历史和导出分享
+              管理您的备课项目，副本即版本，支持导出分享
             </p>
           </div>
           <Dialog open={showNewDialog} onOpenChange={setShowNewDialog}>
@@ -246,27 +254,36 @@ export default function ProjectsPage() {
                   />
                 </div>
                 <div>
-                  <label className="text-sm font-medium mb-1 block">学科年级</label>
-                  <Select 
-                    value={newProject.subject}
-                    onValueChange={(v) => setNewProject({...newProject, subject: v})}
+                  <label className="text-sm font-medium mb-1 block">学段</label>
+                  <Select
+                    value={newProject.grade}
+                    onValueChange={(v) => setNewProject({...newProject, grade: v})}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="选择学科和年级" />
+                      <SelectValue placeholder="选择学段" />
                     </SelectTrigger>
                     <SelectContent>
-                      {subjects.map(s => (
-                        <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                      {gradeOptions.map(g => (
+                        <SelectItem key={g.value} value={g.value}>{g.label}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
                   <label className="text-sm font-medium mb-1 block">章节/主题</label>
-                  <Input 
+                  <Input
                     placeholder="例如：二次函数"
                     value={newProject.chapter}
                     onChange={(e) => setNewProject({...newProject, chapter: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-1 block">核心知识点</label>
+                  <Textarea
+                    placeholder="输入本节课的关键知识点，用逗号分隔"
+                    rows={3}
+                    value={newProject.knowledgePoints}
+                    onChange={(e) => setNewProject({...newProject, knowledgePoints: e.target.value})}
                   />
                 </div>
                 <div>
@@ -332,7 +349,7 @@ export default function ProjectsPage() {
                             {project.favorite && <Star className="h-4 w-4 text-amber-500 fill-amber-500" />}
                             {project.title}
                           </CardTitle>
-                          <CardDescription>{project.subject} · {project.chapter}</CardDescription>
+                          <CardDescription>{displayCourseInfo(project)} · {project.chapter}</CardDescription>
                         </div>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -425,7 +442,7 @@ export default function ProjectsPage() {
                         <Star className="h-4 w-4 text-amber-500 fill-amber-500" />
                         {project.title}
                       </CardTitle>
-                      <CardDescription>{project.subject} · {project.chapter}</CardDescription>
+                      <CardDescription>{displayCourseInfo(project)} · {project.chapter}</CardDescription>
                     </CardHeader>
                     <CardContent>
                       <div className="flex items-center justify-between">
@@ -454,7 +471,7 @@ export default function ProjectsPage() {
                   <Card key={project.id} className="card-hover cursor-pointer">
                     <CardHeader className="pb-2">
                       <CardTitle className="text-lg mb-1">{project.title}</CardTitle>
-                      <CardDescription>{project.subject} · {project.chapter}</CardDescription>
+                      <CardDescription>{displayCourseInfo(project)} · {project.chapter}</CardDescription>
                     </CardHeader>
                     <CardContent>
                       <div className="flex items-center justify-between">

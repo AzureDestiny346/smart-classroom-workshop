@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { 
   BookOpen, 
   Target, 
@@ -34,6 +35,18 @@ import {
   type PrepStage,
   type StageOutputs,
 } from "@/lib/prep-stages";
+import {
+  getProject,
+  saveProjectProgress,
+  type ProjectProgressPatch,
+} from "@/lib/storage";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface ChatMessage {
   id: string;
@@ -57,8 +70,9 @@ const addieSteps = ADDIE_STAGES.map((s) => ({
   icon: STAGE_ICONS[s.id],
 }));
 
-// 数学学科分类
+// 数学学科领域分类（"数学"为新建项目默认值，领域细分按需选择）
 const mathCategories = [
+  { value: "数学", label: "数学（通用）" },
   { value: "代数", label: "代数" },
   { value: "几何", label: "几何" },
   { value: "微积分", label: "微积分" },
@@ -77,7 +91,7 @@ const grades = [
   { value: "高三", label: "高三" },
 ];
 
-export default function PrepPage() {
+function PrepPageContent() {
   // 状态管理
   const [currentStep, setCurrentStep] = useState<PrepStage>("analysis");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -85,15 +99,23 @@ export default function PrepPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [streamContent, setStreamContent] = useState("");
   const [courseInfo, setCourseInfo] = useState({
-    subject: "代数",
+    subjectArea: "数学",
     grade: "九年级",
     chapter: "",
     knowledgePoints: "",
-    objectives: "",
   });
   // 各阶段成果（阶段间信息传递的载体，随请求回传服务端）
   const [stageOutputs, setStageOutputs] = useState<StageOutputs>({});
   const [activeTab, setActiveTab] = useState("wizard");
+  // 续备上下文（ADR-0004）：绑定的备课项目 id，null = 游离备课
+  const [showRestartConfirm, setShowRestartConfirm] = useState(false);
+  // ref 镜像：SSE 回调与去抖回调中读取最新值，避免闭包过期
+  const projectIdRef = useRef<string | null>(null);
+  const stageOutputsRef = useRef<StageOutputs>({});
+  // 最近一次已持久化的课程信息快照（JSON），预填触发的变更据此跳过写回
+  const courseSnapshotRef = useRef("");
+  const searchParams = useSearchParams();
+  const router = useRouter();
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -104,6 +126,65 @@ export default function PrepPage() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, streamContent]);
+
+  // 续备载入（ADR-0004）：仅按挂载时的 URL 参数执行一次
+  useEffect(() => {
+    const id = searchParams.get("project");
+    if (!id) return;
+    const project = getProject(id);
+    if (!project) {
+      // 无效 id：提示后降级为游离备课，并清理 URL 参数
+      toast.warning("项目不存在或已删除，已切换为自由备课");
+      router.replace("/prep");
+      return;
+    }
+    projectIdRef.current = id;
+    setStageOutputs(project.stageOutputs);
+    stageOutputsRef.current = project.stageOutputs;
+    const nextCourse = {
+      subjectArea: project.subjectArea || "数学",
+      grade: grades.some((g) => g.value === project.grade) ? project.grade : "九年级",
+      chapter: project.chapter,
+      knowledgePoints: project.knowledgePoints.join("，"),
+    };
+    setCourseInfo(nextCourse);
+    courseSnapshotRef.current = JSON.stringify(nextCourse);
+    // 跳到第一个未完成阶段；全部完成则停在评估
+    const firstIncomplete = ADDIE_STAGES.find(
+      (s) => !project.stageOutputs[s.id]?.raw.trim()
+    );
+    setCurrentStep(firstIncomplete?.id ?? "evaluation");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅按挂载时的 URL 参数执行一次
+  }, []);
+
+  // 项目模式写回入口：写入失败显式提示，不静默（ADR-0004）；游离备课为空操作
+  const persistProgress = (patch: ProjectProgressPatch) => {
+    const id = projectIdRef.current;
+    if (!id) return;
+    if (!saveProjectProgress(id, patch)) {
+      toast.warning("本地存储写入失败，成果可能未保存");
+    }
+  };
+
+  // 课程信息修改去抖写回（仅项目模式）；与最近持久化快照一致时跳过
+  useEffect(() => {
+    if (!projectIdRef.current) return;
+    const snapshot = JSON.stringify(courseInfo);
+    if (snapshot === courseSnapshotRef.current) return;
+    const timer = window.setTimeout(() => {
+      courseSnapshotRef.current = snapshot;
+      persistProgress({
+        grade: courseInfo.grade,
+        subjectArea: courseInfo.subjectArea,
+        chapter: courseInfo.chapter,
+        knowledgePoints: courseInfo.knowledgePoints
+          .split(/[，,、]/)
+          .map((k) => k.trim())
+          .filter(Boolean),
+      });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [courseInfo]);
 
   // 切换步骤
   const goToStep = (stepId: PrepStage) => {
@@ -122,7 +203,7 @@ export default function PrepPage() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          subject: courseInfo.subject,
+          subject: courseInfo.subjectArea,
           grade: courseInfo.grade,
           chapter: courseInfo.chapter,
           knowledgePoints: courseInfo.knowledgePoints.split(/[，,、]/).filter(Boolean),
@@ -162,7 +243,12 @@ export default function PrepPage() {
                   raw: data.result as string,
                   structured: (data.structured ?? undefined) as Record<string, unknown> | undefined,
                 };
-                setStageOutputs(prev => ({ ...prev, [mode]: output }));
+                // ref 先行合并：SSE 异步回调中避免闭包读到过期成果
+                const merged = { ...stageOutputsRef.current, [mode]: output };
+                stageOutputsRef.current = merged;
+                setStageOutputs(merged);
+                // 自动增量写回（ADR-0004）：仅项目模式生效
+                persistProgress({ stageOutputs: merged });
               }
             } catch {
               // 忽略解析错误
@@ -197,8 +283,8 @@ export default function PrepPage() {
     setStreamContent("");
 
     // 添加上下文信息
-    const contextInfo = courseInfo.chapter 
-      ? `当前备课内容：${courseInfo.subject} - ${courseInfo.grade} - ${courseInfo.chapter}`
+    const contextInfo = courseInfo.chapter
+      ? `当前备课内容：${courseInfo.subjectArea} - ${courseInfo.grade} - ${courseInfo.chapter}`
       : '';
 
     try {
@@ -292,7 +378,7 @@ export default function PrepPage() {
       toast.error("还没有任何阶段成果，请先完成备课流程");
       return;
     }
-    const md = `# ${courseInfo.chapter || "备课教案"}（${courseInfo.grade}${courseInfo.subject}）\n\n${parts.join("\n\n---\n\n")}`;
+    const md = `# ${courseInfo.chapter || "备课教案"}（${courseInfo.grade}${courseInfo.subjectArea}）\n\n${parts.join("\n\n---\n\n")}`;
     const blob = new Blob([md], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -304,11 +390,21 @@ export default function PrepPage() {
     toast.success("教案已保存为 Markdown 文件");
   };
 
-  // 重新开始：清空五阶段成果
+  // 重新开始：游离模式直接清空；项目模式先确认（同步清空项目成果，双清）
   const handleRestart = () => {
+    if (projectIdRef.current) {
+      setShowRestartConfirm(true);
+      return;
+    }
+    doRestart();
+  };
+
+  const doRestart = () => {
     setStageOutputs({});
+    stageOutputsRef.current = {};
     setCurrentStep("analysis");
     setStreamContent("");
+    persistProgress({ stageOutputs: {} });
     toast.success("已重置，可重新开始备课");
   };
 
@@ -350,8 +446,8 @@ export default function PrepPage() {
                     <label className="text-sm font-medium mb-1 block">学科分类</label>
                     <select 
                       className="w-full h-10 px-3 rounded-md border border-input bg-background"
-                      value={courseInfo.subject}
-                      onChange={(e) => setCourseInfo({...courseInfo, subject: e.target.value})}
+                      value={courseInfo.subjectArea}
+                      onChange={(e) => setCourseInfo({...courseInfo, subjectArea: e.target.value})}
                     >
                       {mathCategories.map(cat => (
                         <option key={cat.value} value={cat.value}>{cat.label}</option>
@@ -968,7 +1064,47 @@ export default function PrepPage() {
             </div>
           </div>
         )}
+
+        {/* 重新开始确认（项目模式）：清空操作同步影响已保存的项目成果 */}
+        <Dialog open={showRestartConfirm} onOpenChange={setShowRestartConfirm}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>重新开始备课</DialogTitle>
+              <DialogDescription>
+                当前备课绑定了一个项目，重新开始将同时清空该项目中的全部阶段成果，且无法恢复。确定继续吗？
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setShowRestartConfirm(false)}>
+                取消
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  setShowRestartConfirm(false);
+                  doRestart();
+                }}
+              >
+                确认清空
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
+  );
+}
+
+export default function PrepPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center text-muted-foreground">
+          正在加载备课中心…
+        </div>
+      }
+    >
+      <PrepPageContent />
+    </Suspense>
   );
 }
