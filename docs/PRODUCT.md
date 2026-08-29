@@ -40,7 +40,7 @@ web
 ## Brand Commitments
 
 - 产品名：**智课工坊**（不改动）。
-- 现行设计规范（SPEC.md）：主色 Indigo #6366F1、强调色 Purple #8B5CF6、成功/警告/错误色，shadcn/ui 组件默认样式。⚠ 设计检测器已标记现行 indigo/purple 渐变属于 AI 味反模式，未来视觉迭代时可调整，但任何调整需整体替换而非零敲碎打。
+- 现行设计规范（docs/SPEC.md）：主色 Indigo #6366F1、强调色 Purple #8B5CF6、成功/警告/错误色，shadcn/ui 组件默认样式。⚠ 设计检测器已标记现行 indigo/purple 渐变属于 AI 味反模式，未来视觉迭代时可调整，但任何调整需整体替换而非零敲碎打。
 
 ## Evidence on Hand
 
