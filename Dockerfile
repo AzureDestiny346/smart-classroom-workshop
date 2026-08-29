@@ -23,7 +23,7 @@ RUN pnpm install --frozen-lockfile \
   && pnpm exec next build \
   && pnpm exec tsup src/server.ts --format cjs --platform node --target node20 --outDir dist --no-splitting --no-minify
 
-# ---------- 运行阶段 ----------
+# ---------- 运行阶段：仅生产依赖 ----------
 FROM node:20-alpine AS runner
 
 WORKDIR /app
@@ -39,13 +39,14 @@ ENV HOSTNAME=0.0.0.0
 RUN addgroup -S -g 1001 nodejs \
   && adduser -S -u 1001 -G nodejs nextjs
 
-# 直接复用构建阶段的 node_modules（pnpm 符号链接自包含于 node_modules/.pnpm，
-# 免去 runner 阶段二次联网安装；体积换可靠性）
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
+# 仅安装生产依赖：eslint/typescript/tailwind/tsup/vitest 等 devDeps 不进镜像
+COPY package.json pnpm-lock.yaml ./
+RUN corepack enable && corepack prepare pnpm@9.0.0 --activate \
+  && pnpm install --prod --frozen-lockfile
+
 COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
 COPY --from=builder --chown=nextjs:nodejs /app/dist ./dist
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
 
 USER nextjs
 
