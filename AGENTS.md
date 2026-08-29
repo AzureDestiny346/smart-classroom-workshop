@@ -19,16 +19,20 @@
 src/
 ├── app/
 │   ├── page.tsx              # 首页
-│   ├── prep/page.tsx         # 智能备课中心
+│   ├── prep/page.tsx         # 智能备课中心（支持 ?project= 续备）
 │   ├── prompt/page.tsx       # 提示词工坊
-│   ├── projects/page.tsx      # 我的项目
+│   ├── projects/page.tsx     # 我的项目
 │   └── api/
 │       ├── chat/route.ts     # AI对话API (流式)
 │       └── prep/route.ts     # 备课分析API (流式)
 ├── components/
-│   └── layout/
-│       └── navbar.tsx        # 导航栏
+│   ├── layout/navbar.tsx     # 导航栏
+│   └── ui/                   # shadcn/ui 组件
 └── lib/
+    ├── prep-stages.ts        # AI-ADDIE 阶段契约（ADR-0003）
+    ├── prep-stages.test.ts   # 阶段契约测试（Vitest）
+    ├── storage.ts            # 备课项目持久化 schema v2（ADR-0004）
+    ├── storage.test.ts       # 持久化契约测试（Vitest）
     └── utils.ts              # 工具函数
 ```
 

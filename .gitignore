@@ -102,3 +102,6 @@ Desktop.ini
 # graphify 知识图谱产物（可由 /graphify 再生）
 graphify-out/
 src/graphify-out/
+
+# coze 平台生成的过时部署快照
+package-deploy.json
